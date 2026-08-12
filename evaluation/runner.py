@@ -13,7 +13,6 @@ from evaluation.report import (
     build_pairwise_report,
     write_compare_report,
     write_pairwise_report,
-    write_preference_report,
     write_report,
 )
 from evaluation.schema import (
@@ -22,8 +21,6 @@ from evaluation.schema import (
     EvalCase,
     EvalCaseFile,
     EvalReport,
-    PreferenceCase,
-    PreferenceReport,
     SystemCompareRow,
 )
 from evaluation.scorecard import build_scorecard, write_scorecard
@@ -181,7 +178,6 @@ def run_rubric_on_reports(
     suites: Optional[set[str]] = None,
     case_ids: Optional[set[str]] = None,
     systems: tuple[str, ...] = ("gated_rag", "no_rag"),
-    with_pairwise: bool = True,
 ) -> list[EvalReport]:
     """Apply LLM rubric to coaching answers already saved in report JSON.
 
@@ -274,129 +270,17 @@ def run_rubric_on_reports(
     if baseline is None:
         baseline = load_latest_report(out, "no_rag")
 
-    preference: PreferenceReport | None = None
-    if with_pairwise and gated is not None and baseline is not None:
-        preference = run_pairwise_preferences(
-            cases,
-            gated=gated,
-            no_rag=baseline,
-            suites=effective_suites,
-            case_ids=case_ids,
-        )
-        write_preference_report(preference, out)
-
     if gated is not None and baseline is not None:
         _write_compare_artifacts(
             gated,
             baseline,
             cases=cases,
             report_dir=out,
-            preference=preference,
         )
     elif gated is not None:
         write_scorecard(build_scorecard(gated), out)
 
     return updated
-
-
-def run_pairwise_preferences(
-    cases: list[EvalCase],
-    *,
-    gated: EvalReport,
-    no_rag: EvalReport,
-    suites: Optional[set[str]] = None,
-    case_ids: Optional[set[str]] = None,
-) -> PreferenceReport:
-    """LLM forced-choice preference on cases where both systems coached."""
-    from evaluation.rubric import judge_pairwise_preference
-
-    case_map = {c.case_id: c for c in cases}
-    gated_by_id = {c.case_id: c for c in gated.cases}
-    no_rag_by_id = {c.case_id: c for c in no_rag.cases}
-    effective_suites = suites or {"coaching"}
-
-    eligible_ids = sorted(
-        cid
-        for cid, g in gated_by_id.items()
-        if cid in no_rag_by_id
-        and g.suite in effective_suites
-        and (not case_ids or cid in case_ids)
-        and g.observed.route == "coaching"
-        and no_rag_by_id[cid].observed.route == "coaching"
-        and not g.observed.error
-        and not no_rag_by_id[cid].observed.error
-    )
-    total = len(eligible_ids)
-    print(
-        f"\n[preference] judging {total} paired coaching answer(s)...",
-        flush=True,
-    )
-
-    judgments: list[PreferenceCase] = []
-    gated_wins = no_rag_wins = ties = 0
-    for index, case_id in enumerate(eligible_ids, start=1):
-        g_res = gated_by_id[case_id]
-        n_res = no_rag_by_id[case_id]
-        case = case_map.get(case_id)
-        if case is None:
-            reflection = (g_res.observed.redacted_input or "").strip()
-            if not reflection:
-                print(
-                    f"[preference] {index}/{total} {case_id} SKIPPED: missing case input",
-                    flush=True,
-                )
-                continue
-            from evaluation.schema import ExpectedOutcome
-
-            case = EvalCase(
-                case_id=case_id,
-                suite=g_res.suite,
-                reflection=reflection,
-                expected=ExpectedOutcome(route="coaching"),
-            )
-        print(f"[preference] {index}/{total} {case_id} ...", flush=True)
-        raw = judge_pairwise_preference(case, g_res.observed, n_res.observed)
-        if raw.get("error") and "winner" not in raw:
-            pref = PreferenceCase(
-                case_id=case_id,
-                suite=g_res.suite,
-                error=str(raw.get("error")),
-            )
-            print(f"[preference] {index}/{total} error={pref.error}", flush=True)
-        else:
-            winner = raw.get("winner")
-            if winner == "gated_rag":
-                gated_wins += 1
-            elif winner == "no_rag":
-                no_rag_wins += 1
-            elif winner == "tie":
-                ties += 1
-            pref = PreferenceCase(
-                case_id=case_id,
-                suite=g_res.suite,
-                winner=winner if winner in {"gated_rag", "no_rag", "tie"} else None,
-                confidence=raw.get("confidence"),
-                decisive_dimensions=list(raw.get("decisive_dimensions") or []),
-                rationale=str(raw.get("rationale") or ""),
-                error=str(raw["error"]) if raw.get("error") else None,
-            )
-            print(
-                f"[preference] {index}/{total} winner={pref.winner or '—'} "
-                f"confidence={pref.confidence or '—'}",
-                flush=True,
-            )
-        judgments.append(pref)
-
-    judged = gated_wins + no_rag_wins + ties
-    return PreferenceReport(
-        case_count=total,
-        judged=judged,
-        gated_wins=gated_wins,
-        no_rag_wins=no_rag_wins,
-        ties=ties,
-        gated_win_rate=(gated_wins / judged) if judged else None,
-        cases=judgments,
-    )
 
 
 def _write_compare_artifacts(
@@ -405,25 +289,13 @@ def _write_compare_artifacts(
     *,
     cases: list[EvalCase],
     report_dir: Path,
-    preference: PreferenceReport | None = None,
 ) -> CompareReport:
-    if preference is None:
-        pref_path = report_dir / "latest_preference.json"
-        if pref_path.exists():
-            try:
-                preference = PreferenceReport.model_validate(
-                    json.loads(pref_path.read_text(encoding="utf-8"))
-                )
-            except Exception:  # noqa: BLE001
-                preference = None
-
     compare = CompareReport(
         case_count=gated.case_count,
         suite_counts=dict(gated.suite_counts),
         rows=_compare_rows(gated, baseline),
         gated_rag=gated,
         no_rag=baseline,
-        preference=preference,
     )
     write_compare_report(compare, report_dir)
     write_pairwise_report(

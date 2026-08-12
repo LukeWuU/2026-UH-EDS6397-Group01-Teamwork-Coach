@@ -3,16 +3,15 @@
 Kept separate from deterministic metrics so offline CI can skip it.
 Calibrate against human ratings before trusting absolute scores.
 
-Absolute scores use structured output + PRD-shaped dimensions.
-Pairwise preference compares gated_rag vs no_rag on the same case so
-ceiling effects do not hide product-path differences.
+Absolute scores use structured output + PRD-shaped dimensions. Compare gated
+vs no-RAG via ``rubric_*`` aggregate deltas on the scorecard / compare report.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -58,14 +57,6 @@ class RubricScores(BaseModel):
     )
     overall_notes: str = Field(default="", max_length=500)
 
-
-class PairwisePreferenceJudgment(BaseModel):
-    """Forced comparison for one case: which answer better fits the PRD coach."""
-
-    winner: Literal["gated_rag", "no_rag", "tie"]
-    confidence: Literal["low", "medium", "high"] = "medium"
-    decisive_dimensions: list[str] = Field(default_factory=list)
-    rationale: str = Field(default="", max_length=600)
 
 
 _SYSTEM_PROMPT = f"""You are an expert evaluator for a University of Houston engineering
@@ -117,21 +108,6 @@ Return structured fields only. Include evidence_quote from the response that
 justifies your lowest dimension score.
 """
 
-_PAIRWISE_SYSTEM = f"""You compare two student-facing answers from a teamwork coach.
-
-Prefer the answer that better matches a PRD-aligned product:
-practical, observational (not motive-attributing), proportionate, non-commanding,
-scope-safe, calibrated certainty, and better aligned with the approved evidence
-base (CATME, ABET Meets/Exceeds teamwork criteria, re:Work, conflict/coordination
-sources, psychological safety / climate, teamwork interventions).
-
-Do NOT prefer gated_rag solely because it lists chunk/source IDs. Prefer the
-answer whose advice better reflects the evidence base for this reflection.
-Forced choice: gated_rag, no_rag, or tie (only if truly indistinguishable).
-Be willing to pick a winner; ties should be rare.
-
-{JUDGE_EVIDENCE_BASE}
-"""
 
 
 def judge_coaching_quality(
@@ -167,28 +143,6 @@ def judge_coaching_quality(
             return parsed
         return {"error": str(exc), "parse_error": True, "raw": str(parsed.get("raw", ""))[:500]}
 
-
-def judge_pairwise_preference(
-    case: EvalCase,
-    gated: ObservedRun,
-    no_rag: ObservedRun,
-) -> dict[str, Any]:
-    """Prefer gated vs no-RAG for one coaching case; empty if either side unusable."""
-    if gated.route != "coaching" or no_rag.route != "coaching":
-        return {}
-    if gated.error or no_rag.error:
-        return {}
-
-    user_prompt = _pairwise_user_prompt(case, gated, no_rag)
-    try:
-        judged = eval_judge_invoke(
-            PairwisePreferenceJudgment, _PAIRWISE_SYSTEM, user_prompt
-        )
-        payload = judged.model_dump()
-        payload["rationale"] = str(payload.get("rationale", ""))[:600]
-        return payload
-    except Exception as exc:  # noqa: BLE001
-        return {"error": str(exc)}
 
 
 def attach_rubric_scores(
@@ -263,26 +217,6 @@ def _absolute_user_prompt(
         f"Coach response:\n{response}\n"
     )
 
-
-def _pairwise_user_prompt(
-    case: EvalCase, gated: ObservedRun, no_rag: ObservedRun
-) -> str:
-    return (
-        f"Case id: {case.case_id}\n"
-        f"Suite: {case.suite}\n\n"
-        f"Student reflection:\n{case.reflection}\n\n"
-        f"Student goal:\n{case.student_goal or '(none)'}\n\n"
-        f"=== Answer A: gated_rag (product path) ===\n"
-        f"{_evidence_context(gated, system='gated_rag')}\n"
-        f"Response:\n{gated.student_facing_text or gated.body}\n\n"
-        f"=== Answer B: no_rag (LLM-only baseline) ===\n"
-        f"{_evidence_context(no_rag, system='no_rag')}\n"
-        f"Response:\n{no_rag.student_facing_text or no_rag.body}\n\n"
-        "Which answer better fits an observational, proportionate teamwork coach "
-        "aligned with the approved evidence base?\n"
-        "Do not prefer gated_rag only for having chunk IDs.\n"
-        "Set winner to gated_rag, no_rag, or tie."
-    )
 
 
 def _evidence_context(observed: ObservedRun, *, system: str) -> str:

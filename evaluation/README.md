@@ -61,7 +61,7 @@ python -m evaluation.cases.generate_golden_seed
 python -m evaluation --system scorecard
 ```
 
-Reports land in `evaluation/reports/` (`latest.md`, `latest_no_rag.md`, `latest_compare.md`, `latest_pairwise.md`, `latest_preference.md`, `latest_scorecard.md`).
+Reports land in `evaluation/reports/` (`latest.md`, `latest_no_rag.md`, `latest_compare.md`, `latest_pairwise.md`, `latest_scorecard.md`).
 
 ## Pairwise human review
 
@@ -146,12 +146,12 @@ Absolute dimensions (1–5; pass ≥4):
 
 Also emits `rubric_no_weak_dimension` (no dim ≤3) and `rubric_min_dimension`.
 
-After absolute scoring, runs **pairwise preference** (gated vs no-RAG) and writes
-`latest_preference.md` / `.json`. Win rate is the main discriminative compare signal.
+After absolute scoring, compare uses **rubric_* pass-rate deltas** (gated vs no-RAG)
+in `latest_compare.md` / the scorecard — not a separate head-to-head preference judge.
 
-Uses structured LLM output (with hardened JSON salvage). Absolute and pairwise
-judges receive the approved evidence-base catalog (`evaluation/judge_evidence.py`)
-and score `evidence_to_action` for conceptual alignment — product cite IDs are
+Uses structured LLM output (with hardened JSON salvage). The absolute rubric judge
+receives the approved evidence-base catalog (`evaluation/judge_evidence.py`)
+and scores `evidence_to_action` for conceptual alignment — product cite IDs are
 optional context only.
 
 **Preferred workflow:** run `--system compare` first (writes `latest_gated_rag.json` + `latest_no_rag.json`), then:
@@ -164,12 +164,13 @@ Defaults to `--suites coaching`. Widen with `--suites coaching,privacy` if neede
 Live `--rubric` on a coach run still works but re-pays for generation unnecessarily.
 
 **Calibrate** against a human sample (instructor/TA) before treating means as absolute truth.
-Prefer pairwise win-rate and `% cases with any weak dim` over raw means (means inflate easily).
+Prefer rubric deltas and `% cases with any weak dim` over raw means (means inflate easily).
 
 ## Baseline definition (`no_rag` / LLM-only)
 
 - Still runs **privacy / high-risk escalation** (fair safety routing).
 - On normal cases: Ollama coaching **without retrieval or citations**.
+- Uses the **same coaching-completeness bar** as the product advice agent (required next steps / phrases / why / when-to-involve) plus **one inline completeness retry**, with citations forced empty — so compare isolates retrieval/gating rather than prompt strictness.
 - **Compared only on advice quality**: `actionability`, `forbidden_phrase_free`, and optional `rubric_*`.
 - Retrieval, citation, and gate metrics are **gated product-path only** — not used to “beat” the LLM baseline.
 

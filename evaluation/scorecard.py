@@ -68,7 +68,6 @@ class Scorecard(BaseModel):
     headline_metrics: list[AggregateMetric] = Field(default_factory=list)
     top_failure_codes: list[dict[str, Any]] = Field(default_factory=list)
     baseline_deltas: list[SystemCompareRow] = Field(default_factory=list)
-    preference_summary: dict[str, Any] = Field(default_factory=dict)
     sample_caveat: str = ""
 
 
@@ -103,7 +102,6 @@ def build_scorecard(
         )[:8]
     ]
     deltas = []
-    preference_summary: dict[str, Any] = {}
     if compare is not None:
         deltas = [
             row
@@ -113,15 +111,6 @@ def build_scorecard(
             )
             and row.delta_pass_rate is not None
         ]
-        if compare.preference is not None and compare.preference.judged:
-            pref = compare.preference
-            preference_summary = {
-                "judged": pref.judged,
-                "gated_wins": pref.gated_wins,
-                "no_rag_wins": pref.no_rag_wins,
-                "ties": pref.ties,
-                "gated_win_rate": pref.gated_win_rate,
-            }
 
     caveat = (
         f"Scorecard based on n={report.case_count} scored case(s). "
@@ -142,7 +131,6 @@ def build_scorecard(
         headline_metrics=headline,
         top_failure_codes=top_failures,
         baseline_deltas=deltas,
-        preference_summary=preference_summary,
         sample_caveat=caveat,
     )
 
@@ -292,23 +280,6 @@ def render_scorecard_markdown(scorecard: Scorecard) -> str:
             d = f"{row.delta_pass_rate:+.3f}" if row.delta_pass_rate is not None else "—"
             lines.append(f"| `{row.metric}` | {g} | {b} | {d} |")
 
-    if scorecard.preference_summary:
-        pref = scorecard.preference_summary
-        win = pref.get("gated_win_rate")
-        win_s = f"{win:.3f}" if isinstance(win, (int, float)) else "—"
-        lines.extend(
-            [
-                "",
-                "## Pairwise preference (LLM judge)",
-                "",
-                f"- Judged: **{pref.get('judged', 0)}**",
-                f"- Gated wins: **{pref.get('gated_wins', 0)}**",
-                f"- LLM-only wins: **{pref.get('no_rag_wins', 0)}**",
-                f"- Ties: **{pref.get('ties', 0)}**",
-                f"- Gated win rate: **{win_s}**",
-            ]
-        )
-
     lines.extend(["", "## Top failure codes", ""])
     if scorecard.top_failure_codes:
         for item in scorecard.top_failure_codes:
@@ -415,8 +386,6 @@ def _readiness(
 
 def _load_compare_slim(path: Path) -> CompareReport:
     """Load compare JSON that may omit nested full case lists."""
-    from evaluation.schema import PreferenceReport
-
     raw = json.loads(path.read_text(encoding="utf-8"))
     gated = EvalReport.model_validate(
         {
@@ -440,15 +409,6 @@ def _load_compare_slim(path: Path) -> CompareReport:
             "cases": [],
         }
     )
-    preference = None
-    if raw.get("preference"):
-        preference = PreferenceReport.model_validate(raw["preference"])
-    else:
-        pref_path = path.parent / "latest_preference.json"
-        if pref_path.exists():
-            preference = PreferenceReport.model_validate(
-                json.loads(pref_path.read_text(encoding="utf-8"))
-            )
     return CompareReport(
         version=str(raw.get("version", "1.0")),
         case_count=int(raw.get("case_count", 0)),
@@ -456,5 +416,4 @@ def _load_compare_slim(path: Path) -> CompareReport:
         rows=[SystemCompareRow.model_validate(r) for r in raw.get("rows", [])],
         gated_rag=gated,
         no_rag=no_rag,
-        preference=preference,
     )

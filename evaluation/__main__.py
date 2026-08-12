@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
             "Use compare for gated vs no-RAG. "
             "Use scorecard to rebuild the one-page scorecard from latest reports. "
             "Use rubric to LLM-judge coaching-suite answers already saved in "
-            "reports (absolute scores + gated vs no-RAG pairwise preference; "
+            "reports (absolute rubric scores + gated vs no-RAG compare; "
             "no coach re-run)."
         ),
     )
@@ -124,21 +124,9 @@ def main(argv: list[str] | None = None) -> int:
                 mean = f"{agg.mean:.3f}" if agg.mean is not None else "—"
                 rate = f"{agg.pass_rate:.3f}" if agg.pass_rate is not None else "—"
                 print(f"  {agg.name}: mean={mean} pass_rate={rate} (n={agg.n})")
-        pref_path = Path(args.out) / "latest_preference.json"
-        if pref_path.exists():
-            import json
-
-            pref = json.loads(pref_path.read_text(encoding="utf-8"))
-            win = pref.get("gated_win_rate")
-            win_s = f"{win:.3f}" if isinstance(win, (int, float)) else "—"
-            print(
-                f"Pairwise preference: gated_wins={pref.get('gated_wins', 0)} "
-                f"no_rag_wins={pref.get('no_rag_wins', 0)} ties={pref.get('ties', 0)} "
-                f"gated_win_rate={win_s} (judged={pref.get('judged', 0)})"
-            )
         print(
-            "See evaluation/reports/latest_compare.md, latest_preference.md, "
-            "and latest_scorecard.md (when both systems were available)."
+            "See evaluation/reports/latest_compare.md and "
+            "latest_scorecard.md (when both systems were available)."
         )
         return 0
 

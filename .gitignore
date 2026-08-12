@@ -236,7 +236,6 @@ evaluation/reports/*
 !evaluation/reports/.gitkeep
 !evaluation/reports/latest_scorecard.md
 !evaluation/reports/latest_compare.md
-!evaluation/reports/latest_preference.md
 
 # Local merge snapshots / teammate drop folders
 Latest Update*/

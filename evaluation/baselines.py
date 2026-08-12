@@ -3,6 +3,10 @@
 `gated_rag` — full LangGraph coach (default product path).
 `no_rag` — privacy/risk gate retained; coaching from Ollama with no retrieval,
 citations, or evidence validation. Used to show the value of gated RAG.
+
+The no-RAG path uses the same coaching-completeness bar and one inline retry as
+the product advice agent, but deliberately leaves citations empty so the
+compare isolates retrieval/gating rather than prompt strictness.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ from __future__ import annotations
 import time
 from typing import Any, Literal, Optional
 
+from agents.advice_agent import apply_safe_defaults, structural_gaps
 from agents.escalation_node import escalation_node
 from agents.privacy_risk_node import privacy_and_risk_node
 from config.settings import get_settings
@@ -21,15 +26,28 @@ from services.tracing_service import run_with_tracing, traced_graph_invoke
 
 SystemName = Literal["gated_rag", "no_rag"]
 
-_NO_RAG_SYSTEM = """You are a general teamwork coach for engineering students.
-Give practical advice from the student reflection alone.
+_NO_RAG_SYSTEM = """You are a teamwork and leadership coach for engineering students.
+Create practical, proportionate coaching using ONLY the redacted reflection
+(and optional student goal). You have NO retrieved evidence corpus.
 
 Rules:
-- Encourage action without commands.
-- Do not invent citations, DOIs, paper titles, or source_ids.
-- Leave cited_source_ids and cited_chunk_ids empty.
-- Do not claim clinical, legal, or misconduct verdicts.
-- Avoid motive/character labels.
+- Stay within teamwork/leadership coaching.
+- Encourage action without commands (prefer "you could", "one option is").
+- No unsupported diagnoses, accusations, or motive claims.
+- No overconfidence words like definitely/certainly/obviously.
+- No PII (no names, emails, phones, student IDs, URLs that identify a person).
+- REQUIRED: what_may_be_happening must be a non-empty observational summary.
+- REQUIRED: what_you_could_do_next must include at least 2 concrete next steps.
+- REQUIRED: how_you_might_say_it must include at least 1 example phrase in quotes-ready form.
+- REQUIRED: why_this_may_help must be non-empty.
+- REQUIRED: when_to_involve_someone_else must be non-empty.
+- REQUIRED: cited_source_ids must be an empty list (no corpus — do not invent citations).
+- REQUIRED: cited_chunk_ids must be an empty list (no corpus — do not invent citations).
+- Do not invent DOIs, paper titles, or source_ids.
+- Note when to involve an instructor/advisor without determining fault.
+- Never invent scenario details that are not grounded in the reflection.
+
+Return every required coaching field populated. Incomplete drafts are rejected.
 """
 
 
@@ -98,13 +116,9 @@ def _invoke_no_rag(case: EvalCase) -> ObservedRun:
             )
 
         redacted = privacy.get("redacted_input", case.reflection)
-        user_prompt = (
-            f"Student goal (optional): {case.student_goal or 'not provided'}\n\n"
-            f"Redacted reflection:\n{redacted}\n\n"
-            "Produce coaching. Leave cited_source_ids and cited_chunk_ids empty."
-        )
-        recommendation = structured_invoke(
-            CoachingRecommendation, _NO_RAG_SYSTEM, user_prompt
+        recommendation = _complete_no_rag_recommendation(
+            reflection=redacted,
+            student_goal=case.student_goal,
         )
         body = _format_recommendation_body(recommendation)
         title = "No-RAG baseline coaching"
@@ -143,6 +157,87 @@ def _invoke_no_rag(case: EvalCase) -> ObservedRun:
         )
 
 
+def _complete_no_rag_recommendation(
+    *,
+    reflection: str,
+    student_goal: str | None,
+) -> CoachingRecommendation:
+    """Same completeness retry as product advice, with citations forced empty."""
+    user_prompt = _build_no_rag_user_prompt(
+        reflection=reflection,
+        student_goal=student_goal,
+    )
+    recommendation = apply_safe_defaults(
+        _strip_citations(
+            structured_invoke(CoachingRecommendation, _NO_RAG_SYSTEM, user_prompt)
+        )
+    )
+    gaps = structural_gaps(recommendation, require_citations=False)
+    if gaps:
+        retry_prompt = _build_no_rag_user_prompt(
+            reflection=reflection,
+            student_goal=student_goal,
+            repair_block=(
+                "\nYour previous draft was incomplete:\n"
+                + "\n".join(f"- {g}" for g in gaps)
+                + "\nReturn a COMPLETE recommendation with every required coaching "
+                "field filled. Keep cited_source_ids and cited_chunk_ids empty.\n"
+            ),
+        )
+        recommendation = apply_safe_defaults(
+            _strip_citations(
+                structured_invoke(
+                    CoachingRecommendation, _NO_RAG_SYSTEM, retry_prompt
+                )
+            )
+        )
+    return recommendation
+
+
+def _build_no_rag_user_prompt(
+    *,
+    reflection: str,
+    student_goal: str | None,
+    repair_block: str = "",
+) -> str:
+    return f"""
+Student goal (optional): {student_goal or "not provided"}
+
+Redacted reflection:
+{reflection}
+{repair_block}
+Produce a coaching recommendation tailored to THIS reflection. Do not invent
+unrelated scenarios. You MUST populate ALL of these fields before responding:
+- what_may_be_happening (non-empty)
+- what_you_could_do_next (array with >= 2 concrete steps)
+- how_you_might_say_it (array with >= 1 example phrase)
+- why_this_may_help (non-empty)
+- when_to_involve_someone_else (non-empty)
+- cited_source_ids: [] (always empty — no corpus)
+- cited_chunk_ids: [] (always empty — no corpus)
+"""
+
+
+def _strip_citations(recommendation: CoachingRecommendation) -> CoachingRecommendation:
+    """Force empty citations and trim whitespace (no-RAG must not invent sources)."""
+    data = recommendation.model_dump()
+    actions = [a.strip() for a in data.get("what_you_could_do_next", []) if str(a).strip()]
+    phrases = [p.strip() for p in data.get("how_you_might_say_it", []) if str(p).strip()]
+    watch = [w.strip() for w in data.get("what_to_watch_for", []) if str(w).strip()]
+    return CoachingRecommendation(
+        what_may_be_happening=(data.get("what_may_be_happening") or "").strip(),
+        what_you_could_do_next=actions,
+        how_you_might_say_it=phrases,
+        why_this_may_help=(data.get("why_this_may_help") or "").strip(),
+        what_to_watch_for=watch,
+        when_to_involve_someone_else=(
+            data.get("when_to_involve_someone_else") or ""
+        ).strip(),
+        cited_source_ids=[],
+        cited_chunk_ids=[],
+    )
+
+
 def _strip_wrapping_quotes(text: str) -> str:
     cleaned = (text or "").strip()
     if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in {'"', "'"}:
@@ -166,6 +261,12 @@ def _format_recommendation_body(recommendation: CoachingRecommendation) -> str:
         "",
         "## Why this may help",
         recommendation.why_this_may_help,
+        "",
+        "## What to watch for",
+        *[f"- {item}" for item in recommendation.what_to_watch_for],
+        "",
+        "## When to involve someone else",
+        recommendation.when_to_involve_someone_else,
     ]
     return "\n".join(parts)
 

@@ -2,8 +2,11 @@
 
 from agents.advice_agent import (
     DEFAULT_WHEN_TO_INVOLVE,
+    _build_user_prompt,
     _sanitize_recommendation,
     apply_safe_defaults,
+    attach_supporting_citations,
+    chunk_supports_case,
     structural_gaps,
 )
 from agents.finalize_node import finalize_coaching_node
@@ -261,6 +264,20 @@ def test_structural_gaps_empty_when_complete():
     assert structural_gaps(rec) == []
 
 
+def test_structural_gaps_can_skip_citation_requirement_for_no_rag():
+    rec = CoachingRecommendation(
+        what_may_be_happening="Roles are unclear.",
+        what_you_could_do_next=["Propose owners.", "Add a checkpoint."],
+        how_you_might_say_it=["Could we name owners?"],
+        why_this_may_help="Clear ownership helps.",
+        when_to_involve_someone_else="If process talks stall.",
+        cited_source_ids=[],
+        cited_chunk_ids=[],
+    )
+    assert structural_gaps(rec, require_citations=False) == []
+    assert any("cited_" in g for g in structural_gaps(rec, require_citations=True))
+
+
 def test_validation_marks_incomplete_coaching_repairable():
     rec = CoachingRecommendation(
         what_may_be_happening="",
@@ -295,6 +312,210 @@ def test_advice_sanitize_drops_hallucinated_ids_only():
     assert cleaned.cited_chunk_ids == ["chk_accountability_01"]
     assert cleaned.cited_source_ids == ["src_catme_dimensions"]
     assert cleaned.what_you_could_do_next == ["Propose owners.", "Add a checkpoint."]
+
+
+def test_chunk_supports_case_requires_overlap_with_reflection_or_goal():
+    accountability = (
+        "Accountability interventions include checkpoints, named owners, "
+        "and shared task boards so deliverables are not dropped."
+    )
+    unrelated = (
+        "Psychological safety means people can take interpersonal risks "
+        "without fear of humiliation when speaking up about mistakes."
+    )
+    assert chunk_supports_case(
+        accountability,
+        reflection="Teammate missed FEA checkpoints and named owners slipped.",
+        student_goal="Restore follow-through with checkpoints",
+    )
+    assert not chunk_supports_case(
+        unrelated,
+        reflection="We keep arguing about how to divide design review prep.",
+        student_goal="Reduce process friction before review week",
+    )
+
+
+def test_advice_sanitize_drops_off_case_citations():
+    rec = CoachingRecommendation(
+        what_may_be_happening="Prep work is split unevenly.",
+        what_you_could_do_next=["Propose a shared checklist.", "Name a prep lead."],
+        how_you_might_say_it=["Could we use one checklist for review prep?"],
+        why_this_may_help="A shared checklist may reduce process friction.",
+        when_to_involve_someone_else="If the team cannot agree on a process.",
+        cited_source_ids=["src_google_rework"],
+        cited_chunk_ids=["chk_psych_safety_01"],
+    )
+    evidence = _sample_evidence() + [
+        RetrievedEvidence(
+            chunk_id="chk_psych_safety_01",
+            source_id="src_google_rework",
+            text=(
+                "Psychological safety means people can take interpersonal risks "
+                "without fear of humiliation."
+            ),
+            score=0.7,
+            citation=CitationMetadata(
+                source_id="src_google_rework",
+                citation_key="rework",
+                citation_text="Google re:Work.",
+            ),
+        )
+    ]
+    cleaned = _sanitize_recommendation(
+        rec,
+        evidence,
+        reflection=(
+            "We keep arguing about how to divide the design review prep. "
+            "The technical design itself is not the issue."
+        ),
+        student_goal="Reduce process friction before review week",
+    )
+    assert cleaned.cited_chunk_ids == []
+    assert cleaned.cited_source_ids == []
+    assert cleaned.what_you_could_do_next == [
+        "Propose a shared checklist.",
+        "Name a prep lead.",
+    ]
+
+
+def test_attach_supporting_citations_fills_on_case_chunks():
+    rec = CoachingRecommendation(
+        what_may_be_happening="Missed FEA checkpoints are visible.",
+        what_you_could_do_next=["Ask for a new date.", "Add a shared checkpoint."],
+        how_you_might_say_it=["Can we confirm a new FEA date?"],
+        why_this_may_help="Named checkpoints restore follow-through.",
+        when_to_involve_someone_else="If dates keep slipping.",
+        cited_source_ids=[],
+        cited_chunk_ids=[],
+    )
+    filled = attach_supporting_citations(
+        rec,
+        _sample_evidence(),
+        reflection="Teammate missed FEA checkpoints and named owners slipped.",
+        student_goal="Restore follow-through with checkpoints",
+    )
+    assert filled.cited_chunk_ids == ["chk_accountability_01"]
+    assert filled.cited_source_ids == ["src_catme_dimensions"]
+
+
+def test_attach_supporting_citations_falls_back_to_top_retrieved():
+    rec = CoachingRecommendation(
+        what_may_be_happening="Prep work is split unevenly.",
+        what_you_could_do_next=["Propose a shared checklist.", "Name a prep lead."],
+        how_you_might_say_it=["Could we use one checklist for review prep?"],
+        why_this_may_help="A shared checklist may reduce process friction.",
+        when_to_involve_someone_else="If the team cannot agree on a process.",
+        cited_source_ids=[],
+        cited_chunk_ids=[],
+    )
+    off_case = [
+        RetrievedEvidence(
+            chunk_id="chk_psych_safety_01",
+            source_id="src_google_rework",
+            text=(
+                "Psychological safety means people can take interpersonal risks "
+                "without fear of humiliation."
+            ),
+            score=0.9,
+            citation=CitationMetadata(
+                source_id="src_google_rework",
+                citation_key="rework",
+                citation_text="Google re:Work.",
+            ),
+        ),
+        RetrievedEvidence(
+            chunk_id="chk_other_01",
+            source_id="src_other",
+            text="Unrelated laboratory safety procedures for chemical handling.",
+            score=0.2,
+            citation=CitationMetadata(
+                source_id="src_other",
+                citation_key="other",
+                citation_text="Other.",
+            ),
+        ),
+    ]
+    filled = attach_supporting_citations(
+        rec,
+        off_case,
+        reflection="We keep arguing about how to divide design review prep.",
+        student_goal="Reduce process friction before review week",
+    )
+    assert filled.cited_chunk_ids[0] == "chk_psych_safety_01"
+    assert "chk_psych_safety_01" in filled.cited_chunk_ids
+    assert filled.cited_source_ids[0] == "src_google_rework"
+
+
+def test_validation_requires_cites_when_evidence_exists():
+    rec = CoachingRecommendation(
+        what_may_be_happening="Prep work is split unevenly.",
+        what_you_could_do_next=["Propose a shared checklist.", "Name a prep lead."],
+        how_you_might_say_it=["Could we use one checklist for review prep?"],
+        why_this_may_help="A shared checklist may reduce process friction.",
+        when_to_involve_someone_else="If the team cannot agree on a process.",
+        cited_source_ids=[],
+        cited_chunk_ids=[],
+    )
+    off_case = [
+        RetrievedEvidence(
+            chunk_id="chk_psych_safety_01",
+            source_id="src_google_rework",
+            text=(
+                "Psychological safety means people can take interpersonal risks "
+                "without fear of humiliation."
+            ),
+            score=0.7,
+            citation=CitationMetadata(
+                source_id="src_google_rework",
+                citation_key="rework",
+                citation_text="Google re:Work.",
+            ),
+        )
+    ]
+    empty = validate_recommendation(
+        rec,
+        off_case,
+        reflection="We keep arguing about how to divide design review prep.",
+        student_goal="Reduce process friction before review week",
+    )
+    assert empty.safe_to_display is False
+    assert empty.repairable is True
+
+    filled = attach_supporting_citations(
+        rec,
+        off_case,
+        reflection="We keep arguing about how to divide design review prep.",
+        student_goal="Reduce process friction before review week",
+    )
+    result = validate_recommendation(
+        filled,
+        off_case,
+        reflection="We keep arguing about how to divide design review prep.",
+        student_goal="Reduce process friction before review week",
+    )
+    assert result.safe_to_display is True
+    assert filled.cited_chunk_ids == ["chk_psych_safety_01"]
+
+
+def test_advice_prompt_binds_goal_and_peer_voice():
+    diagnosis = TeamworkDiagnosis(
+        primary_challenge="decision_making",
+        student_goal="Reduce process friction before review week",
+        confidence=0.7,
+    )
+    prompt = _build_user_prompt(
+        reflection="The technical design itself is not the issue.",
+        diagnosis=diagnosis,
+        evidence_payload=[],
+        allowed_source_ids=["src_catme_dimensions"],
+        allowed_chunk_ids=["chk_accountability_01"],
+        student_goal="Reduce process friction before review week",
+    )
+    assert "BINDING" in prompt
+    assert "Reduce process friction before review week" in prompt
+    assert "peer teammate" in prompt
+    assert "else []" in prompt
+    assert "include at least one" not in prompt.lower()
 
 
 def test_finalize_only_surfaces_cited_chunks():

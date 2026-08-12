@@ -192,7 +192,7 @@ Raw reflections are omitted from telemetry; sensitive fields are redacted before
 - `.env` (secrets)
 - `.venv/`, `Knowledge_Corpus_Builder/.venv/`
 - `.chroma/` (rebuild with `python -m ingestion.build_index`)
-- Generated `evaluation/reports/*` (keep `.gitkeep` plus committed `latest_scorecard.md`, `latest_compare.md`, `latest_preference.md`)
+- Generated `evaluation/reports/*` (keep `.gitkeep` plus committed `latest_scorecard.md`, `latest_compare.md`)
 - Generated `Knowledge_Corpus_Builder/Corpus_Output/` workspace JSON/markdown
 - `__pycache__/`, model caches
 - `Latest Update XX/` snapshot folders (local merge artifacts)

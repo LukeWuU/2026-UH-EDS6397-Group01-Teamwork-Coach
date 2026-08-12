@@ -413,7 +413,7 @@ def test_run_rubric_on_reports_offline(tmp_path: Path, monkeypatch):
     from evaluation import rubric as rubric_mod
     from evaluation.report import write_report
     from evaluation.runner import run_rubric_on_reports
-    from evaluation.schema import CaseResult, EvalReport, PreferenceReport
+    from evaluation.schema import CaseResult, EvalReport
 
     case = EvalCase(
         case_id="offline_rubric_01",
@@ -478,16 +478,6 @@ def test_run_rubric_on_reports_offline(tmp_path: Path, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        rubric_mod,
-        "judge_pairwise_preference",
-        lambda _case, _g, _n: {
-            "winner": "gated_rag",
-            "confidence": "high",
-            "decisive_dimensions": ["evidence_to_action"],
-            "rationale": "Cited RACI advice beats generic talk.",
-        },
-    )
-    monkeypatch.setattr(
         "evaluation.runner.configure_eval_llm",
         lambda: "ollama",
     )
@@ -508,14 +498,10 @@ def test_run_rubric_on_reports_offline(tmp_path: Path, monkeypatch):
     assert any(a.name.startswith("rubric_") for a in gated_out.aggregates)
     assert (tmp_path / "latest_compare.json").exists()
     assert (tmp_path / "latest_scorecard.md").exists()
-    assert (tmp_path / "latest_preference.json").exists()
-    pref = PreferenceReport.model_validate(
-        json.loads((tmp_path / "latest_preference.json").read_text(encoding="utf-8"))
-    )
-    assert pref.gated_wins == 1
-    assert pref.gated_win_rate == 1.0
+    assert not (tmp_path / "latest_preference.json").exists()
     compare = json.loads((tmp_path / "latest_compare.json").read_text(encoding="utf-8"))
-    assert compare["preference"]["gated_wins"] == 1
+    assert "preference" not in compare
+    assert any(row["metric"].startswith("rubric_") for row in compare["rows"])
 
 
 def test_pairwise_report_from_eval_reports(tmp_path: Path):
@@ -595,3 +581,67 @@ def test_pairwise_report_from_eval_reports(tmp_path: Path):
     assert "Nobody owns the CAD deliverable" in (
         tmp_path / "latest_pairwise.md"
     ).read_text(encoding="utf-8")
+
+
+def test_no_rag_completeness_retries_and_strips_citations(monkeypatch):
+    """Baseline matches product completeness bar; citations stay empty."""
+    from contract import CoachingRecommendation
+    from evaluation.baselines import (
+        _complete_no_rag_recommendation,
+        _format_recommendation_body,
+        _strip_citations,
+    )
+
+    thin = CoachingRecommendation(
+        what_may_be_happening="Missed FEA handoffs are visible.",
+        what_you_could_do_next=[],
+        how_you_might_say_it=[],
+        why_this_may_help="",
+        when_to_involve_someone_else="",
+        cited_source_ids=["hallucinated_src"],
+        cited_chunk_ids=["hallucinated_chk"],
+    )
+    complete = CoachingRecommendation(
+        what_may_be_happening="Missed FEA handoffs are visible.",
+        what_you_could_do_next=[
+            "Ask for a concrete new date.",
+            "Add a shared checkpoint before Friday.",
+        ],
+        how_you_might_say_it=["Can we confirm a new FEA delivery date together?"],
+        why_this_may_help="Clear dates reduce last-minute surprises.",
+        when_to_involve_someone_else="If deadlines keep slipping after a check-in.",
+        cited_source_ids=["still_hallucinated"],
+        cited_chunk_ids=["still_hallucinated_chk"],
+    )
+    calls: list[str] = []
+
+    def fake_invoke(schema, system, user):  # noqa: ANN001
+        del schema, system
+        calls.append(user)
+        return thin if len(calls) == 1 else complete
+
+    monkeypatch.setattr(
+        "evaluation.baselines.structured_invoke", fake_invoke
+    )
+
+    stripped = _strip_citations(thin)
+    assert stripped.cited_source_ids == []
+    assert stripped.cited_chunk_ids == []
+
+    out = _complete_no_rag_recommendation(
+        reflection="Teammate missed FEA twice.",
+        student_goal="Get a clear next date",
+    )
+    assert len(calls) == 2
+    assert "incomplete" in calls[1].lower()
+    assert out.cited_source_ids == []
+    assert out.cited_chunk_ids == []
+    assert len(out.what_you_could_do_next) >= 2
+    assert out.how_you_might_say_it
+    assert out.why_this_may_help
+    assert out.when_to_involve_someone_else
+
+    body = _format_recommendation_body(out)
+    assert "## What you could do next" in body
+    assert "shared checkpoint" in body
+    assert "## When to involve someone else" in body

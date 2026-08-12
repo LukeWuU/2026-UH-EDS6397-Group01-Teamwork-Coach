@@ -19,6 +19,8 @@ def validate_recommendation(
     evidence: list[RetrievedEvidence],
     *,
     escalation_required: bool = False,
+    reflection: str = "",
+    student_goal: str | None = None,
 ) -> ValidationResult:
     checks: dict[str, bool] = {}
     reasons: list[str] = []
@@ -36,9 +38,20 @@ def validate_recommendation(
     if not checks["has_evidence"]:
         reasons.append("No retrieved evidence available.")
 
-    citation_checks, citation_reasons = validate_citations(recommendation, evidence)
-    checks.update(citation_checks)
-    reasons.extend(citation_reasons)
+    # Citations required whenever retrieval returned anything. Advice attach
+    # prefers on-case chunks, then falls back to top-scored retrieved.
+    require_citations = bool(evidence)
+
+    if require_citations:
+        citation_checks, citation_reasons = validate_citations(recommendation, evidence)
+        checks.update(citation_checks)
+        reasons.extend(citation_reasons)
+    else:
+        checks["citations_present"] = True
+        checks["citations_from_retrieved_sources"] = True
+        checks["cited_chunks_from_retrieved"] = True
+        checks["cited_sources_match_chunks"] = True
+        checks["citations_lexically_grounded"] = True
 
     full_text = _flatten(recommendation)
     checks["no_pii"] = not contains_pii(full_text)

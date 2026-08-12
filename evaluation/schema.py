@@ -152,31 +152,6 @@ class PairwiseReport(BaseModel):
     cases: list[PairwiseCase] = Field(default_factory=list)
 
 
-class PreferenceCase(BaseModel):
-    """LLM pairwise preference for one eval case (gated_rag vs no_rag)."""
-
-    case_id: str
-    suite: SuiteName
-    winner: Optional[Literal["gated_rag", "no_rag", "tie"]] = None
-    confidence: Optional[str] = None
-    decisive_dimensions: list[str] = Field(default_factory=list)
-    rationale: str = ""
-    error: Optional[str] = None
-
-
-class PreferenceReport(BaseModel):
-    """Forced pairwise preference judgments for advice-quality comparison."""
-
-    version: str = "1.0"
-    case_count: int = 0
-    judged: int = 0
-    gated_wins: int = 0
-    no_rag_wins: int = 0
-    ties: int = 0
-    gated_win_rate: Optional[float] = None
-    cases: list[PreferenceCase] = Field(default_factory=list)
-
-
 class CompareReport(BaseModel):
     version: str = "1.0"
     case_count: int = 0
@@ -184,5 +159,4 @@ class CompareReport(BaseModel):
     rows: list[SystemCompareRow] = Field(default_factory=list)
     gated_rag: EvalReport
     no_rag: EvalReport
-    preference: Optional[PreferenceReport] = None
 

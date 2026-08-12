@@ -16,7 +16,6 @@ from evaluation.schema import (
     PairwiseCase,
     PairwiseReport,
     PairwiseSide,
-    PreferenceReport,
 )
 
 _ADVICE_FAILURE_CODES = frozenset({"weak_actionability", "forbidden_phrase"})
@@ -66,9 +65,6 @@ def write_compare_report(
         "case_count": report.case_count,
         "suite_counts": report.suite_counts,
         "rows": [r.model_dump() for r in report.rows],
-        "preference": (
-            report.preference.model_dump() if report.preference is not None else None
-        ),
         "gated_rag": {
             "system": report.gated_rag.system,
             "case_count": report.gated_rag.case_count,
@@ -165,31 +161,6 @@ def render_compare_markdown(report: CompareReport) -> str:
         b_mean = f"{row.no_rag_mean:.3f}" if row.no_rag_mean is not None else "—"
         lines.append(
             f"| `{row.metric}` | {g_rate} | {b_rate} | {delta} | {g_mean} | {b_mean} |"
-        )
-
-    if report.preference is not None and report.preference.judged:
-        pref = report.preference
-        win = (
-            f"{pref.gated_win_rate:.3f}"
-            if pref.gated_win_rate is not None
-            else "—"
-        )
-        lines.extend(
-            [
-                "",
-                "## Pairwise preference (LLM judge)",
-                "",
-                "Forced choice: which answer better fits a cited, observational, "
-                "proportionate teamwork coach (PRD-aligned).",
-                "",
-                f"- Judged: **{pref.judged}** / {pref.case_count}",
-                f"- Gated wins: **{pref.gated_wins}**",
-                f"- LLM-only wins: **{pref.no_rag_wins}**",
-                f"- Ties: **{pref.ties}**",
-                f"- Gated win rate: **{win}**",
-                "",
-                "See `latest_preference.md` for per-case rationales.",
-            ]
         )
 
     lines.extend(
@@ -413,63 +384,3 @@ def build_pairwise_from_reports_dir(
 
     return build_pairwise_report(gated, no_rag, case_inputs=case_inputs)
 
-
-def write_preference_report(
-    report: PreferenceReport, report_dir: Path
-) -> tuple[Path, Path]:
-    """Write stamped + latest preference JSON/Markdown under report_dir."""
-    report_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    json_path = report_dir / f"preference_gated_vs_norag_{stamp}.json"
-    md_path = report_dir / f"preference_gated_vs_norag_{stamp}.md"
-    latest_json = report_dir / "latest_preference.json"
-    latest_md = report_dir / "latest_preference.md"
-
-    json_text = json.dumps(report.model_dump(), indent=2)
-    md_text = render_preference_markdown(report)
-
-    json_path.write_text(json_text, encoding="utf-8")
-    md_path.write_text(md_text, encoding="utf-8")
-    latest_json.write_text(json_text, encoding="utf-8")
-    latest_md.write_text(md_text, encoding="utf-8")
-    return json_path, md_path
-
-
-def render_preference_markdown(report: PreferenceReport) -> str:
-    win = (
-        f"{report.gated_win_rate:.3f}"
-        if report.gated_win_rate is not None
-        else "—"
-    )
-    lines = [
-        "# Pairwise Preference: Gated Coach vs LLM-only",
-        "",
-        f"- Eligible cases: **{report.case_count}**",
-        f"- Judged: **{report.judged}**",
-        f"- Gated wins: **{report.gated_wins}**",
-        f"- LLM-only wins: **{report.no_rag_wins}**",
-        f"- Ties: **{report.ties}**",
-        f"- Gated win rate: **{win}**",
-        "",
-        "Win rate = gated_wins / judged (ties count in the denominator).",
-        "",
-    ]
-    for case in report.cases:
-        winner = case.winner or "—"
-        conf = case.confidence or "—"
-        dims = ", ".join(case.decisive_dimensions) or "—"
-        lines.extend(
-            [
-                f"## `{case.case_id}` [{case.suite}]",
-                "",
-                f"- Winner: **{winner}** (confidence={conf})",
-                f"- Decisive dimensions: {dims}",
-            ]
-        )
-        if case.error:
-            lines.append(f"- Error: {case.error}")
-        if case.rationale:
-            lines.extend(["", case.rationale, ""])
-        else:
-            lines.append("")
-    return "\n".join(lines)

@@ -31,6 +31,8 @@ def validation_agent(state: Any) -> dict[str, Any]:
         recommendation,
         evidence,
         escalation_required=escalation_required,
+        reflection=str(state_get(state, "redacted_input", "") or ""),
+        student_goal=state_get(state, "student_goal"),
     )
     return {
         "validation_result": result,

@@ -11,6 +11,7 @@ from agents.coordinator import (
 from agents.escalation_node import escalation_node
 from agents.fallback_node import fallback_node
 from agents.privacy_risk_node import privacy_and_risk_node
+from config.settings import get_settings
 from contract import AgentState, ValidationResult
 
 
@@ -197,7 +198,7 @@ def test_route_repairable_result_to_single_repair_attempt():
 
     assert _route_after_validation(state) == "repair"
 
-    state.regeneration_count = 1
+    state.regeneration_count = get_settings().max_repair_attempts
     assert _route_after_validation(state) == "fallback"
 
 

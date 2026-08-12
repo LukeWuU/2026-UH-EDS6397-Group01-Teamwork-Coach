@@ -10,26 +10,25 @@ Positive `Δ pass` means the gated coach scored higher on that advice metric.
 
 | Metric | gated pass | LLM-only pass | Δ pass | gated mean | LLM-only mean |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `actionability` | 1.000 | 0.000 | +1.000 | 1.000 | 0.000 |
-| `forbidden_phrase_free` | 1.000 | 1.000 | +0.000 | 1.000 | 1.000 |
-
-## Pairwise preference (LLM judge)
-
-Forced choice: which answer better fits a cited, observational, proportionate teamwork coach (PRD-aligned).
-
-- Judged: **27** / 31
-- Gated wins: **26**
-- LLM-only wins: **1**
-- Ties: **0**
-- Gated win rate: **0.963**
-
-See `latest_preference.md` for per-case rationales.
+| `actionability` | 1.000 | 1.000 | +0.000 | 1.000 | 1.000 |
+| `forbidden_phrase_free` | 0.970 | 0.955 | +0.015 | 0.970 | 0.955 |
+| `rubric_actionability` | 0.733 | 0.667 | +0.067 | 0.793 | 0.750 |
+| `rubric_calibrated_certainty` | 1.000 | 1.000 | +0.000 | 0.973 | 0.978 |
+| `rubric_evidence_to_action` | 0.767 | 0.611 | +0.156 | 0.787 | 0.733 |
+| `rubric_min_dimension` | 0.700 | 0.556 | +0.144 | 0.767 | 0.706 |
+| `rubric_no_weak_dimension` | 0.700 | 0.556 | +0.144 | 0.700 | 0.556 |
+| `rubric_observation_vs_interpretation` | 0.967 | 0.889 | +0.078 | 0.933 | 0.878 |
+| `rubric_proportionality` | 0.967 | 1.000 | -0.033 | 0.967 | 0.961 |
+| `rubric_scope_fidelity` | 1.000 | 0.972 | +0.028 | 1.000 | 0.983 |
+| `rubric_student_agency` | 1.000 | 1.000 | +0.000 | 1.000 | 1.000 |
+| `rubric_tone_non_accusatory` | 0.967 | 0.972 | -0.006 | 0.967 | 0.989 |
 
 ## Advice-quality failure codes
 
 ### gated_rag
-- `wrong_diagnosis`: 5
-- `wrong_route`: 4
+- `forbidden_phrase`: 2
+- `wrong_diagnosis`: 4
+- `wrong_route`: 6
 
 ### LLM-only (no_rag)
-- `weak_actionability`: 36
+- `forbidden_phrase`: 3

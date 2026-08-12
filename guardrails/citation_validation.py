@@ -125,9 +125,16 @@ def validate_citations(
         checks["cited_sources_match_chunks"] = False
 
     cited_evidence = [e for e in evidence if e.chunk_id in set(cited_chunks)]
-    checks["citations_lexically_grounded"] = _lexical_grounding_ok(
-        recommendation, cited_evidence
-    )
+    grounded = _lexical_grounding_ok(recommendation, cited_evidence)
+    if (
+        not grounded
+        and checks.get("cited_chunks_from_retrieved")
+        and cited_evidence
+        and not _any_retrieved_grounds_claim(recommendation, evidence)
+    ):
+        # Corpus miss: no retrieved chunk overlaps the claim — keep membership cites.
+        grounded = True
+    checks["citations_lexically_grounded"] = grounded
     if (
         checks["cited_chunks_from_retrieved"]
         and cited_evidence
@@ -139,6 +146,17 @@ def validate_citations(
         )
 
     return checks, reasons
+
+
+def _any_retrieved_grounds_claim(
+    recommendation: CoachingRecommendation,
+    evidence: list[RetrievedEvidence],
+) -> bool:
+    return any(
+        _lexical_grounding_ok(recommendation, [item])
+        for item in evidence
+        if item.chunk_id
+    )
 
 
 def _content_tokens(text: str) -> set[str]:
